@@ -1089,3 +1089,21 @@ tr.av-ok td:first-child::after { content: ' ✓'; color: #1a7f37; }
 .ft-cases { padding-left: 22px; } .ft-cases li { margin: 6px 0; }
 .ft-t th { white-space: normal; max-width: 150px; }
 .ft-t td:first-child { max-width: 300px; }
+/* player profiles */
+.pp-grid { grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); }
+.pp-g { font-weight: 700; font-size: .8rem; text-transform: uppercase; letter-spacing: .06em; color: #8A8F9A; margin: 10px 0 4px; }
+.pp-row { display: grid; grid-template-columns: 150px 52px 1fr 86px; gap: 8px; align-items: center; font-size: .88rem; margin: 3px 0; }
+.pp-v { text-align: right; font-weight: 600; }
+.pp-bar { height: 12px; background: #F1EEE9; border-radius: 6px; overflow: hidden; }
+.pp-bar i { display: block; height: 100%; background: #9AA3B5; border-radius: 6px; }
+.pp-bar i.hi { background: #1a7f37; } .pp-bar i.lo { background: #c8102e; }
+.pp-p { font-size: .8rem; color: #555; text-align: right; }
+.lt-grid { grid-template-columns: repeat(auto-fill, minmax(460px, 1fr)); }
+.lt-svg { width: 100%; height: auto; }
+/* Scouting-card generator */
+.sc-bar{display:flex;flex-wrap:wrap;gap:12px 18px;align-items:center;margin-top:8px}
+.sc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(420px,1fr));gap:18px;margin:18px 0}
+.sc-card{margin:0;background:#fff;border:1px solid var(--line,#e3e6ea);border-radius:10px;padding:8px}
+.sc-card canvas{width:100%;height:auto;display:block;border-radius:6px;cursor:pointer}
+.sc-card.sc-over{outline:3px dashed #C8102E}
+.sc-card figcaption{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px 2px 2px;font-weight:600}

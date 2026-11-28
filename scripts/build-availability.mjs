@@ -132,11 +132,88 @@ function domesticSection() {
     sec = `<section class="card"><h2>${esc(tn(code))} in ${esc(L.name)}</h2><p class="muted">Their domestic games before they play us${last ? ` — the last one ${days} day${days === 1 ? '' : 's'} before our game` : ''}. Highlighted: 28+ minutes in a domestic game 3 days or less before ours.</p>
 <div class="r-two"><div><h3>Last ${gs.length} games</h3><table class="rtab"><tbody>${gRows}</tbody></table></div><div><h3>EuroLeague regulars at home</h3><table class="rtab"><thead><tr><th>Player</th><th class="num">EL MIN/g</th><th class="num">Last domestic MIN</th><th class="num">PTS</th><th class="num">Domestic MIN/g (last 5)</th><th class="num">Played</th></tr></thead><tbody>${pRows}</tbody></table></div></div></section>`;
   }
+  try {
+    const TT = travelPage();
+    const opp = TT?.get(oc), me = TT?.get(EL.hap);
+    const nxO = opp?.list.find((g) => g.upcoming && !g.domestic && g.opp === EL.hap), nxH = me?.list.find((g) => g.upcoming && !g.domestic && g.opp === oc);
+    if (nxO) {
+      const tn = (c) => EL.teams[c]?.[0] || c;
+      const played = opp.list.filter((g) => g.comp === 'EL' && !g.upcoming);
+      const sameRest = played.filter((g) => restB(g.rest) === restB(nxO.rest)), sameKm = played.filter((g) => !g.home && kmB(g.km) === kmB(nxO.km));
+      const rec = (arr) => { const w = arr.filter((g) => g.win).length; return arr.length ? `${w}–${arr.length - w}` : 'no games'; };
+      const kmS = (g) => (g.km ? g.km.toLocaleString('en-US') + ' km' : 'no travel');
+      const line = (g, who) => (g.prev ? `${who}: last game <strong>${esc(fmtDate(g.prev.date))}</strong> (${esc(g.prev.comp)}, ${g.prev.home ? 'at home' : g.prev.approx ? 'away' : 'in ' + esc(CITY[g.prev.opp]?.[2] || 'away')}) — <strong>${g.rest} day${g.rest === 1 ? '' : 's'} of rest</strong>, <strong>${kmS(g)}</strong> to this game.`
+        : `${who}: rest unknown (we don’t have their domestic league) — <strong>${kmS(g)}</strong> from ${esc(CITY[g.prev?.opp]?.[2] || 'home')} to this game.`);
+      sec += `<section class="card"><h2>Rest and travel before this game</h2><p>${line(nxO, esc(tn(oc)))}</p>${nxH ? `<p>${line(nxH, 'Hapoel')}</p>` : ''}
+<div class="r-grid">${nxO.rest != null ? `<div class="rs"><span>${esc(tn(oc))} with ${esc(restB(nxO.rest))} of rest</span><b>${rec(sameRest)}</b></div>` : ''}${!nxO.home ? `<div class="rs"><span>${esc(tn(oc))} away after ${esc(kmB(nxO.km))}</span><b>${rec(sameKm)}</b></div><div class="rs"><span>${esc(tn(oc))} on the road, all trips</span><b>${rec(played.filter((g) => !g.home))}</b></div>` : `<div class="rs"><span>${esc(tn(oc))} at home</span><b>${rec(played.filter((g) => g.home))}</b></div>`}</div><p class="muted small">EuroLeague games this season. <a href="travel.html">Every team</a>.</p></section>`;
+    }
+  } catch (e) { console.log('travel section skipped:', e.message); }
   if (MEDIA) { const mk = {}; for (const p of MEDIA.players) if (['out', 'doubt', 'uncertain'].includes(p.status)) mk[pkey(p.name)] = { status: p.status === 'uncertain' ? 'doubt' : p.status, label: MSTATUS[p.status][0], name: p.name, note: `${p.reason} (media, ${MEDIA.updated})` }; sec += `<script>window.HTA_MEDIA = ${JSON.stringify(mk).replace(/</g, '\\u003c')};</script>`; }
   html = html.replace(m[0], sec);
   writeFileSync(f, html);
   return best;
 }
 
+
+// ---- Travel and rest: distance from each team's previous game (any competition) and days of rest, and how teams do in each situation ----
+const CITY = { ASV: [45.77, 4.88, 'Villeurbanne'], BAR: [41.38, 2.12, 'Barcelona'], BAS: [42.85, -2.67, 'Vitoria'], BES: [41.04, 29.0, 'Istanbul'], DUB: [25.2, 55.27, 'Dubai'], HTA: [32.08, 34.78, 'Tel Aviv'], IST: [41.0, 28.97, 'Istanbul'], MAD: [40.42, -3.7, 'Madrid'], MIL: [45.46, 9.19, 'Milan'], MUN: [48.14, 11.58, 'Munich'], OLY: [37.94, 23.65, 'Piraeus'], PAM: [39.47, -0.38, 'Valencia'], PAN: [37.98, 23.73, 'Athens'], PAR: [44.79, 20.45, 'Belgrade'], PRS: [48.86, 2.35, 'Paris'], RED: [44.79, 20.45, 'Belgrade'], TEL: [32.08, 34.78, 'Tel Aviv'], ULK: [40.99, 29.03, 'Istanbul'], VIR: [44.49, 11.34, 'Bologna'], ZAL: [54.9, 23.9, 'Kaunas'] };
+const km = (a, b) => { if (!a || !b) return null; const R = 6371, r = Math.PI / 180, dLat = (b[0] - a[0]) * r, dLon = (b[1] - a[1]) * r; const h = Math.sin(dLat / 2) ** 2 + Math.cos(a[0] * r) * Math.cos(b[0] * r) * Math.sin(dLon / 2) ** 2; return Math.round(2 * R * Math.asin(Math.sqrt(h))); };
+/** The domestic team of a EuroLeague club: the team in another league with most of its players. */
+function domesticOf(elCode) {
+  const EL = LOGS.get('el'); if (!EL) return null; const { T } = teamsOf(EL); const t = T.get(elCode); if (!t) return null;
+  const keys = new Set([...t.players.values()].filter((p) => p.gp >= 2).map((p) => pkey(p.name)));
+  let best = null;
+  for (const [lg, L] of LOGS) { if (lg === 'el') continue; const cnt = new Map(); for (const g of L.games) for (const q of g[7]) if (keys.has(pkey(q[0])) && q[2] > 0) { if (!cnt.has(q[1])) cnt.set(q[1], new Set()); cnt.get(q[1]).add(pkey(q[0])); } for (const [code, s] of cnt) if (s.size >= 3 && (!best || s.size > best.n)) best = { lg, L, code, n: s.size }; }
+  return best;
+}
+function travelTable() {
+  const EL = LOGS.get('el'); if (!EL) return null;
+  const out = new Map();
+  for (const code of Object.keys(EL.teams)) {
+    const home = CITY[code]; if (!home) continue;
+    const dom = domesticOf(code);
+    const list = [];
+    for (const g of EL.games) { if (g[3] !== code && g[5] !== code) continue; const isHome = g[3] === code; list.push({ comp: 'EL', date: g[0], code: g[1], home: isHome, opp: isHome ? g[5] : g[3], at: isHome ? home : CITY[g[3]], win: isHome ? g[4] > g[6] : g[6] > g[4], score: isHome ? `${g[4]}–${g[6]}` : `${g[6]}–${g[4]}` }); }
+    if (dom) { for (const g of dom.L.games) { if (g[3] !== dom.code && g[5] !== dom.code) continue; list.push({ comp: dom.L.short, date: g[0], home: g[3] === dom.code, at: home /* away domestic games: their own country, counted at home city */, approx: g[3] !== dom.code }); }
+      for (const u of (dom.L.upcoming || [])) if (u[1] === dom.code || u[2] === dom.code) list.push({ comp: dom.L.short, date: (u[0] || '').slice(0, 10), upcoming: true, domestic: true, home: u[1] === dom.code, at: home, approx: u[1] !== dom.code }); }
+    for (const u of (EL.upcoming || [])) if (u[1] === code || u[2] === code) list.push({ comp: 'EL', date: (u[0] || '').slice(0, 10), upcoming: true, home: u[1] === code, opp: u[1] === code ? u[2] : u[1], at: u[1] === code ? home : CITY[u[1]], utc: u[0] });
+    list.sort((a, b) => a.date.localeCompare(b.date));
+    for (let i = 0; i < list.length; i++) {
+      const prev = list[i - 1], g = list[i]; if (!prev) continue;
+      const gap = Math.round((D(g.date) - D(prev.date)) / dayMs) - 1;
+      if (dom) { g.rest = gap; g.km = km(prev.at, g.at); g.prev = prev; }
+      else {
+        // No domestic games for this team: a EuroLeague double week (0–1 days off) is exact; anything longer may hide a domestic game,
+        // so rest is unknown, and the trip is counted from the team's own city.
+        g.rest = gap <= 1 ? gap : null; g.km = g.home ? 0 : km(home, g.at); g.fromHome = true; if (gap <= 1) { g.prev = prev; g.km = km(prev.at, g.at); g.fromHome = false; }
+      }
+    }
+    out.set(code, { list, dom: dom ? dom.L.short : null });
+  }
+  return out;
+}
+const restB = (r) => (r == null ? null : r <= 1 ? '0–1 days' : r === 2 ? '2 days' : '3+ days');
+const kmB = (k) => (k == null ? null : k < 1000 ? 'under 1,000 km' : k < 2500 ? '1,000–2,500 km' : '2,500+ km');
+function travelPage() {
+  const TT = travelTable(); if (!TT) return null;
+  const EL = LOGS.get('el'), tn = (c) => EL.teams[c]?.[0] || c;
+  const rec = (arr) => { const w = arr.filter((g) => g.win).length; return arr.length ? `${w}–${arr.length - w}` : '–'; };
+  const rows = [...TT.entries()].sort((a, b) => tn(a[0]).localeCompare(tn(b[0]))).map(([code, t]) => {
+    const played = t.list.filter((g) => g.comp === 'EL' && !g.upcoming);
+    const away = played.filter((g) => !g.home);
+    const cells = ['0–1 days', '2 days', '3+ days'].map((b) => `<td class="num">${!t.dom && b !== '0–1 days' ? '<span class="muted">n/a</span>' : rec(played.filter((g) => restB(g.rest) === b))}</td>`).join('') + ['under 1,000 km', '1,000–2,500 km', '2,500+ km'].map((b) => `<td class="num">${rec(away.filter((g) => kmB(g.km) === b))}</td>`).join('');
+    const nx = t.list.find((g) => g.upcoming && !g.domestic);
+    return `<tr${code === EL.hap ? ' class="hap-row"' : ''}><td>${esc(tn(code))}${t.dom ? ` <span class="muted small">+ ${esc(t.dom)}</span>` : ' <span class="muted small">EuroLeague only</span>'}</td>${cells}<td class="small">${nx ? `${nx.home ? 'vs' : 'at'} ${esc(tn(nx.opp))}: ${nx.rest != null ? nx.rest + ' day' + (nx.rest === 1 ? '' : 's') + ' rest' : 'rest unknown'}, ${nx.km ? nx.km.toLocaleString('en-US') + ' km' : 'home game'}` : '–'}</td></tr>`; }).join('');
+  const cfgL = { ...base, LEAGUE: 'el', root: '' };
+  const html = page({ title: 'Travel and rest', cfg: cfgL, info: { games: EL.games.length, lastDate: EL.games[EL.games.length - 1]?.[0], lastRound: null }, active: 'travel.html', sample: false,
+    body: `<section class="card"><h2>EuroLeague record by rest and travel</h2><div class="scroll"><table class="rtab"><thead><tr><th>Team</th><th class="num">0–1 days rest</th><th class="num">2 days</th><th class="num">3+ days</th><th class="num">Away, under 1,000 km</th><th class="num">1,000–2,500 km</th><th class="num">2,500+ km</th><th>Next game</th></tr></thead><tbody>${rows}</tbody></table></div>
+<p class="muted small">Rest = full days off since the previous game in any competition the site covers (the EuroLeague plus the domestic league where we have it). Distance = straight line from the city of the previous game to the city of this one; domestic away games count from the team’s own city. Teams marked “EuroLeague only” play a domestic league the site doesn’t cover: for them only EuroLeague double weeks (0–1 days off) are exact, other rest is shown as n/a, and trips are counted from their own city.</p></section>`,
+    hero: `<section class="cover"><div class="wrap"><div><div class="kicker">EuroLeague</div><h1>Travel and rest</h1><p class="lede">Days of rest and distance travelled before every game, and how each team does on short rest and long trips.</p></div></div></section>` });
+  writeFileSync(join(SITE, 'travel.html'), html);
+  return TT;
+}
+
 for (const lg of ['el', 'il']) if (LOGS.has(lg)) { injuriesPage(lg); console.log(`✓ Injury report (${lg})`); }
 const d = domesticSection(); if (d) console.log(`✓ Domestic games of the next EuroLeague opponent (${d.L.short})`);
+if (!existsSync(join(SITE, 'travel.html'))) travelPage();
+console.log('✓ Travel and rest');

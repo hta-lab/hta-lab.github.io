@@ -19,7 +19,8 @@ import { playerRates } from '../lib/advanced.mjs';
 import { loadShots, courtSvg, zoneRows } from '../lib/shots.mjs';
 import { clutch as clutchOf, afterTimeouts, rates as situRates, rotation as rotationOf, flowExtras } from '../lib/situ.mjs';
 import { playLog, flowStats, flowDetail, connections, offensiveFouls, LABEL as PLAY_LABEL, GROUP as PLAY_GROUP } from '../lib/game.mjs';
-import { runs as runsOf, foulTrouble, WINDOWS, windowPoints, STATES, scoreStates, possOf, winProb, winProbSvg, assistPairs, passingSvg, shotModel, coachGame } from '../lib/insights.mjs';
+import { possessions, START_TYPES } from '../lib/possessions.mjs';
+import { runs as runsOf, onCourtAt, foulTrouble, WINDOWS, windowPoints, STATES, scoreStates, possOf, winProb, winProbSvg, assistPairs, passingSvg, shotModel, coachGame } from '../lib/insights.mjs';
 
 const args = process.argv.slice(2);
 const LEAGUE = args.includes('--league') ? args[args.indexOf('--league') + 1] : 'el';
@@ -1967,6 +1968,144 @@ ${ftRows ? `<h3>By player</h3><div class="scroll"><table class="rtab ft-t"><thea
     writePage(`team-${safe(HAP_GAME_CODE)}-inside.html`, 'Inside our games', `<div class="split-page">${insideHtml}</div>`, HOME,
       cover({ kicker: 'Hapoel', title: 'Inside our games', lede: `Runs for and against, foul trouble, the start and end of quarters, and how we play by score — from the play-by-play of ${H0.g} ${cfg.shortName || ''} games.` }));
   }
+  // ---- Weak spots: turnovers (live vs dead ball), how our possessions start, offensive rebounds allowed, defensive shot chart ----
+  if (H0 && hapGames.length) {
+    const PP = new Map(per.map((x) => [x.g.gameCode, possessions(x.plays)]));
+    const pct = (a, b) => (b ? 100 * a / b : null);
+    const sgn0 = (v) => `${v > 0 ? '+' : v < 0 ? '−' : ''}${Math.abs(v).toFixed(1)}`;
+    // turnovers for every team (league ranks) — the opponent's possession right after each of our turnovers
+    const TOV = new Map(TL.map((o) => [o.code, { g: 0, live: 0, off: 0, dead: 0, ptsLive: 0, quickLive: 0, ptsOff: 0, ptsDead: 0, quickDead: 0, byP: new Map() }]));
+    for (const x of per) for (const side of ['H', 'A']) {
+      const code = side === 'H' ? x.g.home.code : x.g.away.code, r = TOV.get(code); if (!r) continue; r.g++;
+      for (const ps of PP.get(x.g.gameCode)) {
+        if (ps.team === side || !['steal', 'offfoul', 'dead'].includes(ps.start) || ps.cause?.type !== 'TO') continue;
+        const k = ps.start === 'steal' ? 'live' : ps.start === 'offfoul' ? 'off' : 'dead';
+        r[k]++; if (k === 'live') { r.ptsLive += ps.pts; r.quickLive += ps.quick; } else if (k === 'off') r.ptsOff += ps.pts; else { r.ptsDead += ps.pts; r.quickDead += ps.quick; }
+        const pid = ps.cause.pid || 'team'; const b = r.byP.get(pid) || { live: 0, off: 0, dead: 0, ptsLive: 0, quickLive: 0, ptsDead: 0 }; b[k]++; if (k === 'live') { b.ptsLive += ps.pts; b.quickLive += ps.quick; } else b.ptsDead += ps.pts; r.byP.set(pid, b);
+      }
+    }
+    const TV = [...TOV.entries()].filter(([, r]) => r.g).map(([code, r]) => ({ code, ...r }));
+    const rk = (f, hi = false) => { const v = TV.map(f).sort((a, b) => (hi ? b - a : a - b)); return (r) => 1 + v.indexOf(f(r)); };
+    const me = TOV.get(HAP_GAME_CODE), g0 = me.g;
+    const lgAvg = (f) => TV.reduce((a, r) => a + f(r), 0) / TV.length;
+    const tile = (label, v, sub, rank) => `<div class="rs"><span>${label}</span><b>${v} <small>${sub || ''}${rank ? ` · ${ord(rank)}` : ''}</small></b></div>`;
+    const perG = (r, k) => r[k] / r.g;
+    const toRows = [...me.byP.entries()].map(([pid, b]) => ({ pid, ...b, n: b.live + b.off + b.dead })).sort((a, b) => b.ptsLive + b.ptsDead - (a.ptsLive + a.ptsDead)).filter((b) => b.n >= 2);
+    const tovHtml = `<section class="card" id="turnovers"><h2>Turnovers: live ball vs dead ball</h2>
+<p class="ft-explain"><strong>Live-ball turnover</strong> = the opponent steals it and can run: it usually costs a basket right away. <strong>Dead-ball turnover</strong> = out of bounds, travel, shot clock, offensive foul: the opponent inbounds and plays against our set defense. Points = what the opponent scored on that possession; “right away” = in its first 8 seconds.</p>
+<div class="r-grid">${tile('Live-ball turnovers / game', perG(me, 'live').toFixed(1), `league ${lgAvg((r) => perG(r, 'live')).toFixed(1)}`, rk((r) => perG(r, 'live'))(me))}${tile('Their points off them / game', perG(me, 'ptsLive').toFixed(1), `${(me.ptsLive / Math.max(1, me.live)).toFixed(2)} per turnover`, rk((r) => perG(r, 'ptsLive'))(me))}${tile('Right away (8 sec)', perG(me, 'quickLive').toFixed(1), 'in the first 8 seconds')}${tile('Dead-ball turnovers / game', ((me.dead + me.off) / g0).toFixed(1), `${(me.off / g0).toFixed(1)} offensive fouls`, rk((r) => (r.dead + r.off) / r.g)(me))}${tile('Their points off them / game', ((me.ptsDead + me.ptsOff) / g0).toFixed(1), `${((me.ptsDead + me.ptsOff) / Math.max(1, me.dead + me.off)).toFixed(2)} per turnover`)}</div>
+<div class="scroll"><table class="rtab"><thead><tr><th>Player</th><th class="num">Live-ball (stolen)</th><th class="num">Points off them</th><th class="num">…right away</th><th class="num">Offensive fouls</th><th class="num">Other dead-ball</th><th class="num">Points off dead-ball</th><th class="num">Points cost per game</th></tr></thead><tbody>${toRows.map((b) => `<tr><td>${b.pid === 'team' ? '<span class="muted">Team</span>' : `<a href="${playerHref(b.pid)}">${esc(nm(b.pid))}</a>`}</td><td class="num"><strong>${b.live}</strong></td><td class="num neg">${b.ptsLive}</td><td class="num">${b.quickLive}</td><td class="num">${b.off}</td><td class="num">${b.dead}</td><td class="num">${b.ptsDead}</td><td class="num"><strong>${((b.ptsLive + b.ptsDead) / g0).toFixed(1)}</strong></td></tr>`).join('')}</tbody></table></div>
+<p class="muted small">League rank: 1st = fewest. A steal is matched to the turnover when it comes within 3 seconds; offensive fouls are counted on their own.</p></section>`;
+    // our offense by how the possession started, and who finishes it
+    const ST = Object.fromEntries(START_TYPES.map(([k]) => [k, { n: 0, pts: 0, scored: 0, fin: new Map() }]));
+    const LG = Object.fromEntries(START_TYPES.map(([k]) => [k, { n: 0, pts: 0 }]));
+    for (const x of per) { const s = sideOf(x.g, HAP_GAME_CODE); for (const ps of PP.get(x.g.gameCode)) { if (LG[ps.start]) { LG[ps.start].n++; LG[ps.start].pts += ps.pts; } if (s && ps.team === s && ST[ps.start]) { const r = ST[ps.start]; r.n++; r.pts += ps.pts; if (ps.pts > 0) r.scored++; if (ps.first) { const f = r.fin.get(ps.first) || { n: 0, pts: 0 }; f.n++; f.pts += ps.pts; r.fin.set(ps.first, f); } } } }
+    const startRows = START_TYPES.filter(([k]) => k !== 'period').map(([k, l]) => { const r = ST[k], lg = LG[k]; const ppp = r.n ? r.pts / r.n : null, lpp = lg.n ? lg.pts / lg.n : null; const top = [...r.fin.entries()].sort((a, b) => b[1].n - a[1].n).slice(0, 3).map(([id, f]) => `${esc(nm(id))} <span class="muted">${f.n} · ${(f.pts / f.n).toFixed(2)}</span>`).join('<br>');
+      return `<tr><td><strong>${l.replace('their ', 'the opponent’s ')}</strong></td><td class="num">${(r.n / H0.g).toFixed(1)}</td><td class="num"><strong>${ppp == null ? '–' : ppp.toFixed(2)}</strong></td><td class="num muted">${lpp == null ? '–' : lpp.toFixed(2)}</td><td class="num"><strong class="${ppp != null && lpp != null && ppp >= lpp ? 'pos' : 'neg'}">${ppp != null && lpp != null ? sgn0(100 * (ppp - lpp)) : '–'}</strong></td><td class="num">${r.n ? Math.round(100 * r.scored / r.n) + '%' : '–'}</td><td class="small">${top}</td></tr>`; }).join('');
+    const startHtml = `<section class="card" id="starts"><h2>How our possessions start</h2>
+<p class="ft-explain">The same possession is very different after the opponent scores (we bring the ball up against a set defense) and after a defensive rebound or a steal (we can run). Points per possession, compared with the league.</p>
+<div class="scroll"><table class="rtab"><thead><tr><th>Possession starts…</th><th class="num">Per game</th><th class="num">Our points per possession</th><th class="num">League</th><th class="num">Difference per 100</th><th class="num">Scored on</th><th>Who takes the first shot (times · points per possession)</th></tr></thead><tbody>${startRows}</tbody></table></div></section>`;
+    // offensive rebounds allowed: who is on the court when the opponent misses
+    const reb = new Map(), fives = new Map(); let tO = 0, tD = 0;
+    for (const x of hapGames) {
+      const s = sideOf(x.g, HAP_GAME_CODE), sk = s === 'H' ? 'home' : 'away';
+      for (const p of x.plays) {
+        const oppO = p[4] === 'O' && p[2] && p[2] !== s, ourD = p[4] === 'D' && p[2] === s; if (!oppO && !ourD) continue;
+        const five = onCourtAt(x.ps, p[7])[sk] || []; if (five.length !== 5) continue;
+        if (oppO) tO++; else tD++;
+        for (const id of five) { const r = reb.get(id) || { o: 0, d: 0 }; r[oppO ? 'o' : 'd']++; reb.set(id, r); }
+        const k = five.slice().sort().join(','); const f = fives.get(k) || { ids: five, o: 0, d: 0 }; f[oppO ? 'o' : 'd']++; fives.set(k, f);
+        // who grabbed the defensive rebound: credited separately
+        if (ourD && p[3]) { const r = reb.get(p[3]); r.mine = (r.mine || 0) + 1; }
+      }
+    }
+    // our own offensive rebounding: who is on the court when we miss, and who goes and gets it
+    const oreb = new Map(), ofives = new Map(); let oO = 0, oD = 0;
+    for (const x of hapGames) {
+      const s = sideOf(x.g, HAP_GAME_CODE), sk = s === 'H' ? 'home' : 'away';
+      for (const p of x.plays) {
+        const ourO = p[4] === 'O' && p[2] === s, oppD = p[4] === 'D' && p[2] && p[2] !== s; if (!ourO && !oppD) continue;
+        const five = onCourtAt(x.ps, p[7])[sk] || []; if (five.length !== 5) continue;
+        if (ourO) oO++; else oD++;
+        for (const id of five) { const r = oreb.get(id) || { o: 0, d: 0, mine: 0 }; r[ourO ? 'o' : 'd']++; oreb.set(id, r); }
+        const k = five.slice().sort().join(','); const f = ofives.get(k) || { ids: five, o: 0, d: 0 }; f[ourO ? 'o' : 'd']++; ofives.set(k, f);
+        if (ourO && p[3] && oreb.get(p[3])) oreb.get(p[3]).mine++;
+      }
+    }
+    const ourPct = pct(oO, oO + oD);
+    const lgTeams = TL.map((o) => { let a = 0, b = 0; for (const x of per) { const s = sideOf(x.g, o.code); if (!s) continue; for (const p of x.plays) { if (p[4] === 'O' && p[2] === s) a++; else if (p[4] === 'D' && p[2] && p[2] !== s) b++; } } return { code: o.code, v: pct(a, a + b) }; }).filter((r) => r.v != null).sort((a, b) => b.v - a.v);
+    const ourRank = 1 + lgTeams.findIndex((r) => r.code === HAP_GAME_CODE);
+    const orebRows = [...oreb.entries()].filter(([, r]) => r.o + r.d >= 40).map(([id, r]) => { const on = pct(r.o, r.o + r.d), offO = oO - r.o, offD = oD - r.d, off = pct(offO, offO + offD); return { id, on, off, diff: on - off, chances: r.o + r.d, mine: r.mine }; }).sort((a, b) => b.diff - a.diff);
+    const ofRows = [...ofives.values()].filter((f) => f.o + f.d >= 15).map((f) => ({ ...f, p: pct(f.o, f.o + f.d) })).sort((a, b) => b.p - a.p);
+    const teamPct = pct(tO, tO + tD);
+    const rebRows = [...reb.entries()].filter(([, r]) => r.o + r.d >= 40).map(([id, r]) => { const on = pct(r.o, r.o + r.d), offO = tO - r.o, offD = tD - r.d, off = pct(offO, offO + offD); return { id, on, off, diff: on - off, chances: r.o + r.d, mine: r.mine || 0 }; }).sort((a, b) => b.diff - a.diff);
+    const fiveRows = [...fives.values()].filter((f) => f.o + f.d >= 15).map((f) => ({ ...f, p: pct(f.o, f.o + f.d) })).sort((a, b) => b.p - a.p);
+    const lgO = (() => { let o = 0, d = 0; for (const x of per) for (const p of x.plays) { if (p[4] === 'O') o++; else if (p[4] === 'D') d++; } return pct(o, o + d); })();
+    const rebHtml = `<section class="card" id="oreb"><h2>Offensive rebounds: allowed and ours</h2>
+<p class="ft-explain">Of the opponent’s missed shots, how many they get back. Ours: <strong>${teamPct.toFixed(1)}%</strong> (league average ${lgO.toFixed(1)}%). Below: the same number with each player on the court and off it, and for each five. <span class="neg">Red</span> = more offensive rebounds allowed with him on the court.</p>
+<div class="r-two"><div><h3>By player</h3><table class="rtab"><thead><tr><th>Player</th><th class="num">On court</th><th class="num">Off court</th><th class="num">Difference</th><th class="num">His def. rebounds</th></tr></thead><tbody>${rebRows.map((r) => `<tr><td><a href="${playerHref(r.id)}">${esc(nm(r.id))}</a></td><td class="num"><strong>${r.on.toFixed(1)}%</strong></td><td class="num">${r.off.toFixed(1)}%</td><td class="num"><strong class="${r.diff > 0 ? 'neg' : 'pos'}">${sgn0(r.diff)}</strong></td><td class="num">${r.mine}</td></tr>`).join('')}</tbody></table></div>
+<div><h3>Worst and best fives</h3><table class="rtab"><thead><tr><th>Five</th><th class="num">Their misses</th><th class="num">They got back</th></tr></thead><tbody>${[...fiveRows.slice(0, 4), ...(fiveRows.length > 7 ? fiveRows.slice(-3) : fiveRows.slice(4))].map((f, i) => `<tr${i === 4 ? ' style="border-top:3px solid #ccc"' : ''}><td class="small">${f.ids.map((id) => esc(nm(id).split(' ').slice(-1)[0])).join(' · ')}</td><td class="num">${f.o + f.d}</td><td class="num"><strong class="${f.p > teamPct ? 'neg' : 'pos'}">${f.p.toFixed(1)}%</strong></td></tr>`).join('')}</tbody></table><p class="muted small">Fives with 15+ opponent misses. Above the line: most allowed; below it: the best 3.</p></div></div>
+<h3 style="margin-top:28px">And our own offensive rebounding — ${ourRank ? ord(ourRank) : ''} in the league</h3>
+<p class="ft-explain">Of <strong>our</strong> missed shots, we get back <strong>${ourPct.toFixed(1)}%</strong> (league ${lgO.toFixed(1)}%). This is the real gap: here is who is on the court when we miss, and who goes and gets it. <span class="pos">Green</span> = we get more of our misses back with him on the court.</p>
+<div class="r-two"><div><table class="rtab"><thead><tr><th>Player</th><th class="num">On court</th><th class="num">Off court</th><th class="num">Difference</th><th class="num">His off. rebounds</th></tr></thead><tbody>${orebRows.map((r) => `<tr><td><a href="${playerHref(r.id)}">${esc(nm(r.id))}</a></td><td class="num"><strong>${r.on.toFixed(1)}%</strong></td><td class="num">${r.off.toFixed(1)}%</td><td class="num"><strong class="${r.diff >= 0 ? 'pos' : 'neg'}">${sgn0(r.diff)}</strong></td><td class="num">${r.mine}</td></tr>`).join('')}</tbody></table></div>
+<div><table class="rtab"><thead><tr><th>Five</th><th class="num">Our misses</th><th class="num">We got back</th></tr></thead><tbody>${[...ofRows.slice(0, 4), ...(ofRows.length > 7 ? ofRows.slice(-3) : ofRows.slice(4))].map((f, i) => `<tr${i === 4 ? ' style="border-top:3px solid #ccc"' : ''}><td class="small">${f.ids.map((id) => esc(nm(id).split(' ').slice(-1)[0])).join(' · ')}</td><td class="num">${f.o + f.d}</td><td class="num"><strong class="${f.p >= ourPct ? 'pos' : 'neg'}">${f.p.toFixed(1)}%</strong></td></tr>`).join('')}</tbody></table><p class="muted small">Fives with 15+ of our misses. Above the line: the best; below it: the worst 3.</p></div></div></section>`;
+    // defensive shot chart (shot locations: EuroLeague)
+    const against = ALLSHOTS.filter((s2) => s2.opp === HAP_GAME_CODE && s2.z);
+    const defHtml = against.length >= 200 ? (() => { const rows = zoneRows(against, ALLSHOTS.filter((s2) => s2.z)); return `<section class="card" id="defshots"><h2>Where opponents score against us</h2>
+<div class="r-two"><div>${courtSvg(against, { mode: 'zones', league: ALLSHOTS, title: 'Opponents vs Hapoel' })}</div><div><table class="rtab"><thead><tr><th>Zone</th><th class="num">Share of their shots</th><th class="num">League</th><th class="num">They shoot</th><th class="num">League</th></tr></thead><tbody>${rows.map((r) => `<tr><td>${esc(r.label)}</td><td class="num">${r.share.toFixed(1)}%</td><td class="num muted">${r.lshare == null ? '–' : r.lshare.toFixed(1) + '%'}</td><td class="num"><strong class="${r.pct != null && r.lpct != null && r.pct > r.lpct ? 'neg' : 'pos'}">${r.pct == null ? '–' : r.pct.toFixed(1) + '%'}</strong></td><td class="num muted">${r.lpct == null ? '–' : r.lpct.toFixed(1) + '%'}</td></tr>`).join('')}</tbody></table><p class="muted small">Red on the chart and in the table = opponents shoot better than the league average from there. ${against.length} opponent shots with a location.</p></div></div></section>`; })() : '';
+    writePage(`team-${safe(HAP_GAME_CODE)}-weakspots.html`, 'Weak spots', `<div class="split-page"><nav class="hap-toc"><a href="#turnovers">Turnovers</a><a href="#starts">How possessions start</a><a href="#oreb">Offensive rebounds</a>${defHtml ? '<a href="#defshots">Defensive shot chart</a>' : ''}</nav>${tovHtml}${startHtml}${rebHtml}${defHtml}</div>`, HOME,
+      cover({ kicker: 'Hapoel', title: 'Weak spots', lede: `Turnovers split into live and dead balls, how our possessions start, who is on the court when we give up offensive rebounds${defHtml ? ', and where opponents score against us' : ''}.` }));
+  }
+  // ---- Player profiles: percentiles against the league at his position + free throws under pressure ----
+  if (H0 && hapGames.length) {
+    const grp = (id) => { const p = String(posOf.get(id) || '').toLowerCase(); return p.startsWith('g') ? 'Guards' : p.startsWith('f') ? 'Forwards' : p.startsWith('c') ? 'Centers' : null; };
+    const p40 = (v, p) => (p.totalMin ? 40 * v / p.totalMin : null);
+    const M = [
+      ['Scoring', 'Points per 40', (p) => p40(p.totals.pts, p), true, 1],
+      ['Scoring', 'True shooting %', (p) => (p.totals.fga2 + p.totals.fga3 + p.totals.fta >= 40 ? p.ts : null), true, 1],
+      ['Scoring', '3P%', (p) => (p.totals.fga3 >= 20 ? 100 * p.totals.fgm3 / p.totals.fga3 : null), true, 1],
+      ['Scoring', 'FT%', (p) => (p.totals.fta >= 15 ? 100 * p.totals.ftm / p.totals.fta : null), true, 1],
+      ['Playmaking', 'Assists per 40', (p) => p40(p.totals.ast, p), true, 1],
+      ['Playmaking', 'Assists per turnover', (p) => (p.totals.ast + p.totals.tov >= 10 ? p.totals.ast / Math.max(1, p.totals.tov) : null), true, 2],
+      ['Playmaking', 'Turnovers per 40', (p) => p40(p.totals.tov, p), false, 1],
+      ['Rebounding', 'Off. rebounds per 40', (p) => p40(p.totals.oreb, p), true, 1],
+      ['Rebounding', 'Def. rebounds per 40', (p) => p40(p.totals.dreb, p), true, 1],
+      ['Defense', 'Steals per 40', (p) => p40(p.totals.stl, p), true, 1],
+      ['Defense', 'Blocks per 40', (p) => p40(p.totals.blk, p), true, 1],
+      ['Defense', 'Fouls per 40', (p) => p40(p.totals.pf, p), false, 1],
+      ['Impact', 'Fouls drawn per 40', (p) => p40(p.totals.fd, p), true, 1],
+      ['Impact', 'PIR per 40', (p) => p40(p.totals.pir, p), true, 1],
+      ['Impact', 'On/off (net rating)', (p) => onOffOf(p.id)?.swing ?? null, true, 1]
+    ];
+    const pool = players.filter((p) => p.gp >= 5 && p.mpg >= 10);
+    const pctl = (vals, v, hi) => { const n = vals.length; if (!n || v == null) return null; let below = 0, eq = 0; for (const x of vals) { if (x === v) eq++; else if (hi ? x < v : x > v) below++; } return Math.round(100 * (below + eq / 2) / n); };
+    const cards = players.filter((p) => p.team === HAP_GAME_CODE && p.gp >= 3 && p.mpg >= 5).sort((a, b) => b.totalMin - a.totalMin).map((p) => {
+      const g = grp(p.id); const peers = g ? pool.filter((q) => grp(q.id) === g) : pool; const ref = peers.length >= 25 ? peers : pool;
+      let lastGroup = '';
+      const rows = M.map(([group, label, f, hi, dp]) => { const v = f(p); const vals = ref.map(f).filter((x) => x != null); const pc = pctl(vals, v, hi); const head = group !== lastGroup ? `<div class="pp-g">${group}</div>` : ''; lastGroup = group;
+        return `${head}<div class="pp-row"><span class="pp-l">${label}</span><span class="pp-v">${v == null ? '–' : v.toFixed(dp)}</span><span class="pp-bar"><i class="${pc == null ? '' : pc >= 80 ? 'hi' : pc <= 20 ? 'lo' : ''}" style="width:${pc ?? 0}%"></i></span><span class="pp-p">${pc == null ? '–' : pc >= 50 ? `Top ${Math.max(1, 100 - pc)}%` : `Bottom ${Math.max(1, pc)}%`}</span></div>`; }).join('');
+      return `<article class="pcard pp-card"><header><strong><a href="${playerHref(p.id)}">${esc(p.name)}</a></strong><span class="muted small">${g ? g.slice(0, -1) : 'All positions'} · ${p.gp} games · ${f1(p.mpg)} min</span></header>${rows}<p class="muted small">Compared with ${ref === peers && g ? `${ref.length} ${g.toLowerCase()}` : `${ref.length} players`} with 5+ games and 10+ minutes.</p></article>`; }).join('');
+    // free throws under pressure: last 5 minutes of the 4th quarter or overtime, within 5 points
+    const FT = new Map();
+    for (const x of per) for (const p of x.plays) {
+      if ((p[4] !== 'FTM' && p[4] !== 'FTA') || !p[3]) continue;
+      const before = p[4] === 'FTM' ? (p[2] === 'H' ? p[5] - 1 - p[6] : p[5] - (p[6] - 1)) : p[5] - p[6];
+      const clutch = p[7] >= 2100 && Math.abs(before) <= 5;
+      const o = FT.get(p[3]) || { cm: 0, ca: 0, m: 0, a: 0, team: p[2] === 'H' ? x.g.home.code : x.g.away.code }; o.team = p[2] === 'H' ? x.g.home.code : x.g.away.code;
+      if (clutch) { o.ca++; if (p[4] === 'FTM') o.cm++; } else { o.a++; if (p[4] === 'FTM') o.m++; } FT.set(p[3], o);
+    }
+    const ftp = (m, a) => (a ? (100 * m / a).toFixed(0) + '%' : '–');
+    const hapFt = [...FT.entries()].filter(([, o]) => o.team === HAP_GAME_CODE && o.a + o.ca >= 6).sort((a, b) => b[1].ca - a[1].ca || b[1].a - a[1].a);
+    const lgFt = [...FT.entries()].filter(([, o]) => o.ca >= 8).map(([id, o]) => ({ id, ...o, p: o.cm / o.ca })).sort((a, b) => b.p - a.p);
+    const lgC = [...FT.values()].reduce((a, o) => [a[0] + o.cm, a[1] + o.ca, a[2] + o.m, a[3] + o.a], [0, 0, 0, 0]);
+    const ftHtml = `<section class="card" id="clutchft"><h2>Free throws under pressure</h2>
+<p class="ft-explain">Free throws in the last 5 minutes of the 4th quarter (or overtime) with the score within 5, against all his other free throws. League: ${ftp(lgC[0], lgC[1])} under pressure, ${ftp(lgC[2], lgC[3])} otherwise.</p>
+<div class="r-two"><div><h3>Hapoel</h3><table class="rtab"><thead><tr><th>Player</th><th class="num">Under pressure</th><th class="num">Rest of the game</th><th class="num">Difference</th></tr></thead><tbody>${hapFt.map(([id, o]) => { const d = o.ca && o.a ? 100 * (o.cm / o.ca - o.m / o.a) : null; return `<tr><td><a href="${playerHref(id)}">${esc(nm(id))}</a></td><td class="num"><strong>${o.cm}/${o.ca}</strong> <span class="muted">${ftp(o.cm, o.ca)}</span></td><td class="num">${o.m}/${o.a} <span class="muted">${ftp(o.m, o.a)}</span></td><td class="num">${d == null || o.ca < 4 ? '<span class="muted">few</span>' : `<strong class="${d >= 0 ? 'pos' : 'neg'}">${d > 0 ? '+' : ''}${d.toFixed(0)}</strong>`}</td></tr>`; }).join('')}</tbody></table><p class="muted small">"few" = fewer than 4 free throws under pressure: too few to judge.</p></div>
+<div><h3>League: best and worst under pressure</h3><table class="rtab"><thead><tr><th>Player</th><th class="num">Under pressure</th><th class="num">Rest</th></tr></thead><tbody>${(lgFt.length > 10 ? [...lgFt.slice(0, 6), ...lgFt.slice(-4)] : lgFt).map((o, i) => `<tr${i === 6 && lgFt.length > 10 ? ' style="border-top:3px solid #ccc"' : ''}${o.team === HAP_GAME_CODE ? ' class="hap-row"' : ''}><td>${esc(nm(o.id))} <span class="muted small">${esc(T.get(o.team)?.tv || '')}</span></td><td class="num"><strong>${o.cm}/${o.ca}</strong> <span class="muted">${ftp(o.cm, o.ca)}</span></td><td class="num">${ftp(o.m, o.a)}</td></tr>`).join('')}</tbody></table><p class="muted small">Players with 8+ free throws under pressure.</p></div></div></section>`;
+    writePage(`team-${safe(HAP_GAME_CODE)}-profiles.html`, 'Player profiles', `<div class="split-page"><nav class="hap-toc"><a href="#profiles">Percentile profiles</a><a href="#clutchft">Free throws under pressure</a></nav>
+<section class="card" id="profiles"><h2>Where each player ranks</h2><p class="ft-explain">Each bar shows where he stands among players at his position in the league: “Top 10%” = better than 90% of them, “Bottom 10%” = worse than 90%. <span class="pos">Green</span> = top 20%, <span class="neg">red</span> = bottom 20%. For turnovers and fouls, fewer is better, so a high percentile there is good too.</p><div class="pcards pp-grid">${cards}</div></section>${ftHtml}</div>`, HOME,
+      cover({ kicker: 'Hapoel', title: 'Player profiles', lede: 'Every Hapoel player against the league at his position (scoring, playmaking, rebounding, defense, impact), and who to trust at the free-throw line at the end of close games.' }));
+  }
   // ---- Coach habits (every team) ----
   const habit = (o) => { const c = o.coach, tos = c.flatMap((x) => x.tos), n = c.length; const fs = c.map((x) => x.firstSub).filter((v) => v != null).sort((a, b) => a - b); const sq = c.map((x) => x.startersQ1).filter((v) => v != null); const close = c.filter((x) => x.close35);
     return { n, toG: tos.length / n, run6: tos.length ? tos.filter((t) => t.oppRun >= 6).length / tos.length : null, avgRun: tos.length ? tos.reduce((a, t) => a + t.oppRun, 0) / tos.length : null, byQ: [1, 2, 3, 4].map((q) => tos.filter((t) => t.period === q).length / n), late: tos.filter((t) => t.t >= 2280 && t.period === 4).length / n, firstSub: fs.length ? fs[Math.floor(fs.length / 2)] : null, sq: sq.length ? sq.reduce((a, b) => a + b, 0) / sq.length : null, lateUsed: close.length ? close.reduce((a, x) => a + x.lateUsed, 0) / close.length : null, used: c.reduce((a, x) => a + x.used, 0) / n, closeN: close.length }; };
@@ -2035,6 +2174,76 @@ ${pRows.some((x) => x.p.team === HAP_GAME_CODE) ? `<section class="card"><h2>Hap
   return { HB, T, habitFor: (code) => HB.get(code), clk };
 })();
 
+// ---- League trends: how the league is changing round by round, with Hapoel on top ----
+{
+  const byR = new Map();
+  for (const g of games) { const r = g.round; if (r == null) continue; if (!byR.has(r)) byR.set(r, []); byR.get(r).push(g); }
+  const rounds = [...byR.keys()].sort((a, b) => a - b);
+  if (rounds.length >= 4) {
+    const poss = (t, o) => t.fga2 + t.fga3 - t.oreb + t.tov + 0.44 * t.fta;
+    const MET = [
+      ['pace', 'Pace', 'possessions per team per 40 min', (t, o, g) => poss(t, o)],
+      ['ortg', 'Offensive rating', 'points per 100 possessions', (t, o, g, pts) => 100 * pts / Math.max(1, poss(t, o))],
+      ['r3', '3-point rate', '% of shots that are threes', (t) => 100 * t.fga3 / Math.max(1, t.fga2 + t.fga3)],
+      ['p3', '3P%', 'three-point accuracy', (t) => 100 * t.fgm3 / Math.max(1, t.fga3)],
+      ['ftr', 'Free-throw rate', 'free throws per 100 shots', (t) => 100 * t.fta / Math.max(1, t.fga2 + t.fga3)],
+      ['pf', 'Fouls', 'per team per game', (t) => t.pf],
+      ['tov', 'Turnovers', 'per 100 possessions', (t, o) => 100 * t.tov / Math.max(1, poss(t, o))],
+      ['oreb', 'Offensive rebound %', 'misses rebounded by the offense', (t, o) => 100 * t.oreb / Math.max(1, t.oreb + o.dreb)]
+    ];
+    const series = MET.map(([k, label, sub, f]) => {
+      const lg = [], hap = [];
+      for (const r of rounds) {
+        let sum = 0, n = 0, h = null;
+        for (const g of byR.get(r)) for (const [a, b] of [[g.home, g.away], [g.away, g.home]]) { const v = f(a.totals, b.totals, g, a.score); if (Number.isFinite(v)) { sum += v; n++; } if (a.code === HAP_GAME_CODE && Number.isFinite(v)) h = v; }
+        lg.push(n ? sum / n : null); hap.push(h);
+      }
+      const third = Math.max(2, Math.floor(rounds.length / 3));
+      const avg = (a) => { const v = a.filter((x) => x != null); return v.length ? v.reduce((x, y) => x + y, 0) / v.length : null; };
+      return { k, label, sub, lg, hap, first: avg(lg.slice(0, third)), last: avg(lg.slice(-third)), hapAvg: avg(hap), lgAvg: avg(lg), third };
+    });
+    const chart = (s) => {
+      const W = 520, H = 200, P = 30, vals = [...s.lg, ...s.hap].filter((v) => v != null); const lo = Math.min(...vals), hi = Math.max(...vals), pad = (hi - lo) * 0.1 || 1;
+      const X = (i) => P + (W - P - 10) * i / Math.max(1, rounds.length - 1), Y = (v) => 10 + (H - 40) * (1 - (v - lo + pad) / (hi - lo + 2 * pad));
+      const line = s.lg.map((v, i) => (v == null ? null : `${X(i).toFixed(1)},${Y(v).toFixed(1)}`)).filter(Boolean).join(' ');
+      return `<svg viewBox="0 0 ${W} ${H}" class="lt-svg" role="img" aria-label="${esc(s.label)} by round"><polyline points="${line}" fill="none" stroke="#1f4e8c" stroke-width="2.5"/>${s.hap.map((v, i) => (v == null ? '' : `<circle cx="${X(i).toFixed(1)}" cy="${Y(v).toFixed(1)}" r="4.5" fill="#c8102e"/>`)).join('')}
+${rounds.map((r, i) => (i % Math.ceil(rounds.length / 8) === 0 || i === rounds.length - 1 ? `<text x="${X(i).toFixed(1)}" y="${H - 8}" text-anchor="middle" font-size="12" fill="#888">R${r}</text>` : '')).join('')}<text x="4" y="${(Y(hi) + 4).toFixed(1)}" font-size="11" fill="#888">${hi.toFixed(1)}</text><text x="4" y="${(Y(lo) + 4).toFixed(1)}" font-size="11" fill="#888">${lo.toFixed(1)}</text></svg>`;
+    };
+    const cards = series.map((s) => { const d = s.last - s.first; return `<article class="pcard lt-card"><header><strong>${esc(s.label)}</strong><span class="muted small">${esc(s.sub)}</span></header>${chart(s)}<p class="small">League: <strong>${s.first.toFixed(1)}</strong> in the first ${s.third} rounds → <strong>${s.last.toFixed(1)}</strong> in the last ${s.third} <span class="${Math.abs(d) < 0.05 * Math.abs(s.first) ? 'muted' : ''}">(${d > 0 ? '+' : ''}${d.toFixed(1)})</span>${HAP_GAME_CODE && s.hapAvg != null ? ` · Hapoel ${s.hapAvg.toFixed(1)} (league ${s.lgAvg.toFixed(1)})` : ''}</p></article>`; }).join('');
+    writePage('league-trends.html', 'League trends', `<p class="muted"><span style="color:#1f4e8c;font-weight:700">Blue line</span> = league average in each round. ${HAP_GAME_CODE ? '<span style="color:#c8102e;font-weight:700">Red dots</span> = Hapoel in that round.' : ''}</p><div class="pcards lt-grid">${cards}</div>`, HOME,
+      cover({ kicker: 'League', title: 'League trends', lede: 'How the league is changing during the season — pace, scoring, threes, free throws, fouls, turnovers and rebounding — round by round, and where Hapoel stands.' }));
+  }
+}
+// ---- Scouting-card generator: one card per player, every team (next opponent first); drawn in the browser on <canvas> ----
+if (HAP_GAME_CODE && cfg.LEAGUE !== 'il' && (cfg.LEAGUE || 'el') === 'el') {
+  const nx = upcoming.find((x) => x.h.code === HAP_GAME_CODE || x.a.code === HAP_GAME_CODE);
+  const nextOpp = nx ? (nx.h.code === HAP_GAME_CODE ? nx.a.code : nx.h.code) : null;
+  const POS = { Guard: 'GUARD', Forward: 'FORWARD', Center: 'CENTER' };
+  const today = new Date().toISOString().slice(0, 10);
+  const pct = (m, a) => (a ? (100 * m / a).toFixed(1) + '%' : '–');
+  const per = (v, gp) => (gp ? (v / gp).toFixed(1) : '–');
+  const CT = teams.filter((t) => t.code !== HAP_GAME_CODE).sort((a, b) => (a.code === nextOpp ? -1 : b.code === nextOpp ? 1 : titleCase(a.name).localeCompare(titleCase(b.name)))).map((t) => ({
+    code: t.code, name: titleCase(t.name), crest: crests.get(t.code) || '',
+    players: players.filter((p) => p.team === t.code && p.gp >= 1).sort((a, b) => b.totalMin - a.totalMin).map((p) => {
+      const pe = findPerson(peopleIndex, p), s = p.totals, gp = p.gp;
+      let first = '', last = '';
+      if (pe?.name && pe.name.includes(',')) { const [l, f] = pe.name.split(','); last = titleCase(l.trim()); first = titleCase((f || '').trim()); }
+      else { const w = String(p.name).split(' '); first = w.slice(0, -1).join(' '); last = w.slice(-1)[0] || ''; }
+      return { id: p.id, num: String(pe?.dorsal ?? p.number ?? ''), first, last, pos: POS[pe?.position] || (pe?.position || '').toUpperCase() || '–', age: pe?.birthDate ? String(ageOn(pe.birthDate, today) ?? '–') : '–', height: pe?.height ? String(pe.height) : '–',
+        pts: per(s.pts, gp), ast: per(s.ast, gp), reb: per(s.reb, gp), p2: pct(s.fgm2, s.fga2), p2sub: `${per(s.fgm2, gp)}/${per(s.fga2, gp)}`, p3: pct(s.fgm3, s.fga3), p3sub: `${per(s.fgm3, gp)}/${per(s.fga3, gp)}`, min: per(p.totalMin, gp), gp: String(gp) };
+    })
+  }));
+  writePage('cards.html', 'Scouting cards', `<section class="card no-print"><h2>Scouting cards</h2>
+<p>One card per player with this season’s EuroLeague averages, in the same layout as the Milano cards. Pick a team, drop a photo on any card (or click it to choose a file), and download one card or all of them as PNG images. Photos stay on this device — nothing is uploaded.</p>
+<div class="sc-bar"><label>Team <select id="sc-team"></select></label> <label>Opponent logo <input type="file" id="sc-logo" accept="image/*"></label> <button type="button" id="sc-all" class="btn">Download all cards</button> <span id="sc-msg" class="muted small"></span></div></section>
+<div id="sc-grid" class="sc-grid"></div>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:ital,wght@0,600;0,700;0,800;1,800;1,900&display=swap">`, HOME,
+    `<section class="cover"><div class="wrap"><div><div class="kicker">EuroLeague</div><h1>Scouting cards</h1><p class="lede">Player cards for the next opponent — or any team — ready to download.</p></div></div></section>`,
+    { scripts: `<script>window.SC_DATA=${JSON.stringify({ season: '2026/27', teams: CT }).replace(/</g, '\\u003c')};</script><script src="cards.js?v=${assetVersion()}" defer></script>` });
+  copyFileSync('static/cards.js', join(OUT, 'cards.js'));
+  copyFileSync('static/hapoel-crest.png', join(OUT, 'hapoel-crest.png'));
+  console.log(`✓ Scouting cards: ${CT.length} teams${nextOpp ? `, next opponent ${nextOpp} first` : ''}`);
+}
 // ---- Game-day pack for Hapoel's next game: summary, end-of-game sheet, opponent player cards (printable) ----
 {
   const nx = HAP_GAME_CODE ? upcoming.find((x) => x.h.code === HAP_GAME_CODE || x.a.code === HAP_GAME_CODE) : null;
